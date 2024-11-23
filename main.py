@@ -22,14 +22,24 @@ class RemoteJobScraper:
     def setup_selenium(self):
         """Setup Selenium WebDriver with Chrome"""
         try:
+            from selenium.webdriver.chrome.service import Service
+            from webdriver_manager.chrome import ChromeDriverManager
+            import platform
+            
             chrome_options = Options()
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
             
-            # Install ChromeDriver using webdriver_manager
-            service = Service(ChromeDriverManager().install())
+            # Set up ChromeDriver based on OS
+            if platform.system() == 'Windows':
+                # Use a specific ChromeDriver version for Windows
+                driver_path = ChromeDriverManager(version="114.0.5735.90").install()
+            else:
+                driver_path = ChromeDriverManager().install()
+            
+            service = Service(driver_path)
             
             print("Initializing Chrome WebDriver...")
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -42,56 +52,158 @@ class RemoteJobScraper:
 
     def search_remote_jobs(self, keyword):
         """Search for remote jobs across different platforms"""
-        self.search_we_work_remotely(keyword)
-        self.search_remote_ok(keyword)
-        self.search_remote_co(keyword)
-        
+        try:
+            # Search job boards that don't require Selenium
+            self.search_we_work_remotely(keyword)
+            self.search_remote_ok(keyword)
+            self.search_stackoverflow_jobs(keyword)
+            self.search_github_jobs(keyword)
+            self.search_nodesk_jobs(keyword)
+            self.search_justremote_jobs(keyword)
+            self.search_remotive_jobs(keyword)
+            
+            # Only try Selenium-dependent sources if driver is available
+            if self.driver:
+                self.search_company_jobs(keyword)
+                self.search_remote_co(keyword)
+        except Exception as e:
+            print(f"Error during job search: {str(e)}")
+            
     def search_we_work_remotely(self, keyword):
-        """Scrape jobs from WeWorkRemotely"""
+        """Search We Work Remotely for jobs"""
         try:
             url = f"https://weworkremotely.com/remote-jobs/search?term={keyword}"
-            response = requests.get(url)
+            response = requests.get(url, headers=BROWSER_HEADERS)
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            job_listings = soup.find_all('li', class_='feature')
-            for job in job_listings:
-                title = job.find('span', class_='title')
-                company = job.find('span', class_='company')
+            for job in soup.select('li.feature'):
+                title = job.select_one('.title')
+                company = job.select_one('.company')
+                date = job.select_one('.date')
+                
                 if title and company:
                     self.jobs.append({
                         'title': title.text.strip(),
                         'company': company.text.strip(),
-                        'source': 'WeWorkRemotely',
-                        'url': f"https://weworkremotely.com{job.find('a')['href']}",
-                        'date_posted': datetime.now().strftime('%Y-%m-%d'),
-                        'keyword': keyword
+                        'date_posted': date.text.strip() if date else '',
+                        'source': 'We Work Remotely',
+                        'url': f"https://weworkremotely.com{job.select_one('a')['href']}" if job.select_one('a') else '',
                     })
+            
+            time.sleep(DELAY_BETWEEN_REQUESTS)
         except Exception as e:
-            print(f"Error scraping WeWorkRemotely: {str(e)}")
-
+            print(f"Error scraping We Work Remotely: {str(e)}")
+            
     def search_remote_ok(self, keyword):
-        """Scrape jobs from RemoteOK"""
+        """Search RemoteOK for jobs"""
         try:
             url = f"https://remoteok.com/remote-{keyword}-jobs"
-            headers = BROWSER_HEADERS
-            response = requests.get(url, headers=headers)
+            response = requests.get(url, headers=BROWSER_HEADERS)
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            job_listings = soup.find_all('tr', class_='job')
-            for job in job_listings:
-                title = job.find('h2', itemprop='title')
-                company = job.find('h3', itemprop='name')
+            for job in soup.select('tr.job'):
+                title = job.select_one('.company h2')
+                company = job.select_one('.company h3')
+                date = job.select_one('.time')
+                
                 if title and company:
                     self.jobs.append({
                         'title': title.text.strip(),
                         'company': company.text.strip(),
+                        'date_posted': date.text.strip() if date else '',
                         'source': 'RemoteOK',
-                        'url': f"https://remoteok.com{job.find('a', class_='preventLink')['href']}",
-                        'date_posted': datetime.now().strftime('%Y-%m-%d'),
-                        'keyword': keyword
+                        'url': f"https://remoteok.com{job['data-url']}" if 'data-url' in job.attrs else '',
                     })
+            
+            time.sleep(DELAY_BETWEEN_REQUESTS)
         except Exception as e:
             print(f"Error scraping RemoteOK: {str(e)}")
+            
+    def search_remotive_jobs(self, keyword):
+        """Search Remotive for jobs"""
+        try:
+            url = f"https://remotive.com/remote-jobs/search?term={keyword}"
+            response = requests.get(url, headers=BROWSER_HEADERS)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            for job in soup.select('.job-list-item'):
+                title = job.select_one('.position')
+                company = job.select_one('.company')
+                date = job.select_one('.job-date')
+                
+                if title and company:
+                    self.jobs.append({
+                        'title': title.text.strip(),
+                        'company': company.text.strip(),
+                        'date_posted': date.text.strip() if date else '',
+                        'source': 'Remotive',
+                        'url': f"https://remotive.com{job.select_one('a')['href']}" if job.select_one('a') else '',
+                    })
+            
+            time.sleep(DELAY_BETWEEN_REQUESTS)
+        except Exception as e:
+            print(f"Error scraping Remotive: {str(e)}")
+            
+    def search_company_jobs(self, keyword):
+        """Search for jobs directly from company career pages"""
+        company_job_boards = {
+            'Microsoft': 'https://careers.microsoft.com/us/en/search-results',
+            'Google': 'https://careers.google.com/jobs/results/',
+            'Amazon': 'https://www.amazon.jobs/en/search',
+            'Meta': 'https://www.metacareers.com/jobs/',
+            'Apple': 'https://jobs.apple.com/en-us/search',
+            'Netflix': 'https://jobs.netflix.com/search',
+            'Twitter': 'https://careers.twitter.com/en/roles',
+            'LinkedIn': 'https://careers.linkedin.com/jobs',
+            'Salesforce': 'https://careers.salesforce.com/jobs',
+            'Adobe': 'https://careers.adobe.com/us/en/search-results'
+        }
+        
+        for company, url in company_job_boards.items():
+            try:
+                if self.driver is None:
+                    print(f"Skipping {company} jobs as Selenium WebDriver is not available")
+                    continue
+                
+                print(f"Searching {company} jobs...")
+                self.driver.get(url)
+                time.sleep(DELAY_BETWEEN_REQUESTS)
+                
+                # Search for keyword if search box is available
+                try:
+                    search_box = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='text'], input[type='search']"))
+                    )
+                    search_box.send_keys(keyword)
+                    search_box.submit()
+                    time.sleep(DELAY_BETWEEN_REQUESTS)
+                except:
+                    print(f"Could not find search box on {company} careers page")
+                
+                # Extract job listings
+                job_elements = self.driver.find_elements(By.CSS_SELECTOR, "[data-job-id], .job-card, .job-listing")
+                for job in job_elements[:10]:  # Limit to first 10 results per company
+                    try:
+                        title = job.find_element(By.CSS_SELECTOR, "h2, h3, .job-title").text.strip()
+                        location = job.find_element(By.CSS_SELECTOR, ".location, .job-location").text.strip()
+                        url = job.find_element(By.CSS_SELECTOR, "a").get_attribute("href")
+                        
+                        if "remote" in location.lower() or "hybrid" in location.lower():
+                            self.jobs.append({
+                                'title': title,
+                                'company': company,
+                                'location': location,
+                                'source': f"{company} Careers",
+                                'url': url,
+                                'date_posted': datetime.now().strftime('%Y-%m-%d'),
+                                'keyword': keyword,
+                                'is_company_direct': True
+                            })
+                    except Exception as e:
+                        print(f"Error extracting job from {company}: {str(e)}")
+                
+            except Exception as e:
+                print(f"Error searching {company} jobs: {str(e)}")
 
     def search_remote_co(self, keyword):
         """Scrape jobs from Remote.co"""
@@ -125,6 +237,120 @@ class RemoteJobScraper:
                     continue
         except Exception as e:
             print(f"Error scraping Remote.co: {str(e)}")
+
+    def search_stackoverflow_jobs(self, keyword):
+        """Scrape jobs from Stack Overflow Jobs"""
+        try:
+            url = f"https://stackoverflow.com/jobs/feed?r=true&q={keyword}"
+            headers = BROWSER_HEADERS
+            response = requests.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'xml')
+                items = soup.find_all('item')
+                
+                for item in items:
+                    title = item.title.text if item.title else ''
+                    company = item.find('a10:author').find('a10:name').text if item.find('a10:author') else ''
+                    location = item.location.text if item.location else 'Remote'
+                    
+                    self.jobs.append({
+                        'title': title,
+                        'company': company,
+                        'location': location,
+                        'source': 'Stack Overflow',
+                        'url': item.link.text if item.link else '',
+                        'date_posted': item.pubDate.text if item.pubDate else datetime.now().strftime('%Y-%m-%d'),
+                        'keyword': keyword
+                    })
+        except Exception as e:
+            print(f"Error scraping Stack Overflow Jobs: {str(e)}")
+            
+    def search_github_jobs(self, keyword):
+        """Scrape jobs from GitHub Jobs"""
+        try:
+            url = f"https://jobs.github.com/positions.json?description={keyword}&location=remote"
+            headers = BROWSER_HEADERS
+            response = requests.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                jobs_data = response.json()
+                for job in jobs_data:
+                    self.jobs.append({
+                        'title': job.get('title', ''),
+                        'company': job.get('company', ''),
+                        'location': job.get('location', 'Remote'),
+                        'source': 'GitHub Jobs',
+                        'url': job.get('url', ''),
+                        'date_posted': job.get('created_at', datetime.now().strftime('%Y-%m-%d')),
+                        'keyword': keyword
+                    })
+        except Exception as e:
+            print(f"Error scraping GitHub Jobs: {str(e)}")
+            
+    def search_nodesk_jobs(self, keyword):
+        """Scrape jobs from NoDesk"""
+        try:
+            url = f"https://nodesk.co/remote-jobs/?search={keyword}"
+            headers = BROWSER_HEADERS
+            response = requests.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                job_listings = soup.find_all('article', class_='job')
+                
+                for job in job_listings:
+                    title_elem = job.find('h2', class_='job-title')
+                    company_elem = job.find('span', class_='company')
+                    
+                    if title_elem and company_elem:
+                        title = title_elem.text.strip()
+                        company = company_elem.text.strip()
+                        url = title_elem.find('a')['href'] if title_elem.find('a') else ''
+                        
+                        self.jobs.append({
+                            'title': title,
+                            'company': company,
+                            'location': 'Remote',
+                            'source': 'NoDesk',
+                            'url': url,
+                            'date_posted': datetime.now().strftime('%Y-%m-%d'),
+                            'keyword': keyword
+                        })
+        except Exception as e:
+            print(f"Error scraping NoDesk: {str(e)}")
+            
+    def search_justremote_jobs(self, keyword):
+        """Scrape jobs from JustRemote"""
+        try:
+            url = f"https://justremote.co/remote-{keyword}-jobs"
+            headers = BROWSER_HEADERS
+            response = requests.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                job_listings = soup.find_all('div', class_='job-list-item')
+                
+                for job in job_listings:
+                    title_elem = job.find('h3', class_='job-title')
+                    company_elem = job.find('div', class_='company-name')
+                    
+                    if title_elem and company_elem:
+                        title = title_elem.text.strip()
+                        company = company_elem.text.strip()
+                        url = 'https://justremote.co' + title_elem.find('a')['href'] if title_elem.find('a') else ''
+                        
+                        self.jobs.append({
+                            'title': title,
+                            'company': company,
+                            'location': 'Remote',
+                            'source': 'JustRemote',
+                            'url': url,
+                            'date_posted': datetime.now().strftime('%Y-%m-%d'),
+                            'keyword': keyword
+                        })
+        except Exception as e:
+            print(f"Error scraping JustRemote: {str(e)}")
 
     def save_results(self, keyword):
         """Save scraped jobs to CSV and JSON files, organized by keyword and append to existing files"""

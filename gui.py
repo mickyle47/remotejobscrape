@@ -30,28 +30,43 @@ class JobScraperGUI:
         self.root.title("Remote Job Scraper")
         self.root.geometry("1000x800")
         
+        # Make the window resizable
+        self.root.resizable(True, True)
+        
         # Create main container with padding
         self.main_container = ttk.Frame(root, padding="10")
         self.main_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Configure grid
+        # Configure grid weights for resizing
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
+        self.main_container.columnconfigure(0, weight=1)
+        self.main_container.rowconfigure(3, weight=1)  # Make results table expandable
         
         self.setup_gui()
         self.scraper = None
         self.is_scraping = False
-        self.all_jobs_data = {}
+        self.all_jobs_data = []  # Changed from dict to list for better data handling
         
     def setup_gui(self):
         # Keyword management section
         keyword_frame = ttk.LabelFrame(self.main_container, text="Job Keywords", padding="5")
         keyword_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
+        # Select/Unselect All buttons
+        select_frame = ttk.Frame(keyword_frame)
+        select_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
+        ttk.Button(select_frame, text="Select All", command=lambda: self.toggle_all_keywords(True)).grid(
+            row=0, column=0, padx=5
+        )
+        ttk.Button(select_frame, text="Unselect All", command=lambda: self.toggle_all_keywords(False)).grid(
+            row=0, column=1, padx=5
+        )
+        
         # Existing keywords
         self.keyword_vars = {}
         keyword_scroll = ttk.Frame(keyword_frame)
-        keyword_scroll.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        keyword_scroll.grid(row=1, column=0, sticky=(tk.W, tk.E))
         
         for i, keyword in enumerate(KEYWORDS):
             var = tk.BooleanVar(value=True)
@@ -62,7 +77,7 @@ class JobScraperGUI:
         
         # Custom keyword entry
         custom_frame = ttk.Frame(keyword_frame)
-        custom_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
+        custom_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
         
         self.custom_keyword = ttk.Entry(custom_frame)
         self.custom_keyword.grid(row=0, column=0, padx=5)
@@ -143,10 +158,6 @@ class JobScraperGUI:
         scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
         self.results_tree.configure(yscrollcommand=scrollbar.set)
         
-        # Make the main container expandable
-        self.main_container.columnconfigure(0, weight=1)
-        self.main_container.rowconfigure(3, weight=1)
-        
     def add_custom_keyword(self):
         keyword = self.custom_keyword.get().strip().lower().replace(' ', '-')
         if keyword and keyword not in self.keyword_vars:
@@ -179,39 +190,198 @@ class JobScraperGUI:
         self.update_results_tree(filter_text)
         
     def export_results(self, format_type):
+        """Export results to CSV or JSON file"""
         if not self.all_jobs_data:
-            messagebox.showwarning("Warning", "No data to export")
+            messagebox.showwarning("No Data", "No job data available to export!")
             return
             
-        file_types = {
-            'csv': [('CSV files', '*.csv')],
-            'json': [('JSON files', '*.json')]
-        }
-        
-        filename = filedialog.asksaveasfilename(
-            defaultextension=f".{format_type}",
-            filetypes=file_types[format_type]
-        )
-        
+        # Create a list of dictionaries for DataFrame
+        jobs_list = []
+        for job in self.all_jobs_data:
+            job_dict = {
+                'Title': job.get('title', ''),
+                'Company': job.get('company', ''),
+                'Location': job.get('location', 'Remote'),
+                'Source': job.get('source', ''),
+                'URL': job.get('url', ''),
+                'Date Posted': job.get('date_posted', ''),
+                'Keyword': job.get('keyword', '')
+            }
+            jobs_list.append(job_dict)
+            
+        # Get file name from user
+        if format_type == 'csv':
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv")],
+                title="Export as CSV"
+            )
+        else:
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json")],
+                title="Export as JSON"
+            )
+            
         if filename:
-            if format_type == 'csv':
-                pd.DataFrame(self.all_jobs_data).to_csv(filename, index=False)
-            else:
-                with open(filename, 'w') as f:
-                    json.dump(self.all_jobs_data, f, indent=2)
-            messagebox.showinfo("Success", f"Data exported to {filename}")
+            try:
+                if format_type == 'csv':
+                    df = pd.DataFrame(jobs_list)
+                    df.to_csv(filename, index=False, encoding='utf-8')
+                else:
+                    with open(filename, 'w', encoding='utf-8') as f:
+                        json.dump(jobs_list, f, indent=2, ensure_ascii=False)
+                        
+                messagebox.showinfo("Success", f"Data exported successfully to {filename}")
+                
+                # Open the containing folder
+                folder_path = os.path.dirname(os.path.abspath(filename))
+                os.startfile(folder_path)
+                
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Error exporting data: {str(e)}")
         
     def show_completion_summary(self):
-        total_jobs = sum(len(jobs) for jobs in self.all_jobs_data.values())
+        """Show summary of scraped jobs"""
+        if not self.all_jobs_data:
+            messagebox.showinfo("Scraping Complete", "No jobs found.")
+            return
+            
+        # Group jobs by keyword
+        keyword_jobs = {}
+        for job in self.all_jobs_data:
+            keyword = job['keyword']
+            if keyword not in keyword_jobs:
+                keyword_jobs[keyword] = []
+            keyword_jobs[keyword].append(job)
+        
+        # Create summary
+        total_jobs = len(self.all_jobs_data)
         summary = f"Scraping Completed!\n\n"
         summary += f"Total Jobs Found: {total_jobs}\n\n"
         summary += "Summary by Keyword:\n"
         
-        for keyword, jobs in self.all_jobs_data.items():
-            summary += f"- {keyword}: {len(jobs)} jobs\n"
+        for keyword, jobs in keyword_jobs.items():
+            sources = set(job.get('source', '') for job in jobs)
+            summary += f"- {keyword}: {len(jobs)} jobs from {', '.join(sources)}\n"
         
         messagebox.showinfo("Scraping Complete", summary)
         
+    def start_scraping(self):
+        """Start the scraping process"""
+        if self.is_scraping:
+            return
+            
+        selected_keywords = [
+            keyword for keyword, var in self.keyword_vars.items()
+            if var.get()
+        ]
+        
+        if not selected_keywords:
+            messagebox.showwarning(
+                "No Keywords",
+                "Please select at least one keyword to search for."
+            )
+            return
+            
+        self.progress_var.set("Starting scraper...")
+        self.is_scraping = True  # Set this to True before starting
+        self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+        
+        # Clear previous results
+        self.all_jobs_data = []
+        
+        def scrape():
+            try:
+                self.scraper = RemoteJobScraper()
+                total_keywords = len(selected_keywords)
+                
+                for idx, keyword in enumerate(selected_keywords, 1):
+                    if not self.is_scraping:
+                        break
+                        
+                    self.progress_var.set(f"Searching for {keyword} jobs... ({idx}/{total_keywords})")
+                    self.scraper.search_remote_jobs(keyword)
+                    
+                    # Add jobs to the list
+                    for job in self.scraper.jobs:
+                        job['keyword'] = keyword
+                        self.all_jobs_data.append(job)
+                    
+                    # Update the results tree after each keyword
+                    self.root.after(0, self.update_results_tree)
+                    
+                    self.scraper.jobs = []  # Clear jobs for next keyword
+                    
+                if self.is_scraping:
+                    self.progress_var.set("Scraping completed!")
+                    self.root.after(0, self.show_completion_summary)
+                
+            except Exception as e:
+                self.progress_var.set(f"Error: {str(e)}")
+                messagebox.showerror("Error", f"An error occurred during scraping: {str(e)}")
+            finally:
+                self.is_scraping = False
+                self.start_button.config(state=tk.NORMAL)
+                self.stop_button.config(state=tk.DISABLED)
+                if self.scraper:
+                    self.scraper.close()
+                    
+        # Start scraping in a separate thread
+        thread = threading.Thread(target=scrape)
+        thread.daemon = True
+        thread.start()
+        
+    def update_results_tree(self, filter_text=None):
+        """Update the results tree with current job data"""
+        # Clear existing items
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+            
+        if not self.all_jobs_data:
+            return
+            
+        # Group jobs by keyword
+        keyword_jobs = {}
+        for job in self.all_jobs_data:
+            keyword = job['keyword']
+            if keyword not in keyword_jobs:
+                keyword_jobs[keyword] = {
+                    'count': 0,
+                    'sources': set(),
+                    'last_updated': job.get('date_posted', '')
+                }
+            keyword_jobs[keyword]['count'] += 1
+            keyword_jobs[keyword]['sources'].add(job.get('source', ''))
+            if job.get('date_posted', '') > keyword_jobs[keyword]['last_updated']:
+                keyword_jobs[keyword]['last_updated'] = job.get('date_posted', '')
+        
+        # Add to tree
+        for keyword, data in keyword_jobs.items():
+            if filter_text is None or filter_text.lower() in keyword.lower():
+                self.results_tree.insert(
+                    '',
+                    'end',
+                    values=(
+                        keyword,
+                        data['count'],
+                        data['last_updated'],
+                        ', '.join(data['sources'])
+                    )
+                )
+                
+    def stop_scraping(self):
+        self.is_scraping = False
+        self.log("Stopping scraper...")
+        self.start_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.DISABLED)
+        
+    def toggle_all_keywords(self, state):
+        """Toggle all keyword checkboxes to the specified state."""
+        for var in self.keyword_vars.values():
+            var.set(state)
+            
     def log(self, message):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
@@ -221,83 +391,6 @@ class JobScraperGUI:
         progress = (current / total) * 100
         self.progress_bar['value'] = progress
         self.progress_var.set(f"Processing {current}/{total} keywords...")
-        
-    def update_results_tree(self, filter_text=None):
-        self.results_tree.delete(*self.results_tree.get_children())
-        for keyword in self.keyword_vars:
-            if self.keyword_vars[keyword].get():
-                csv_path = os.path.join('output', keyword, f'{keyword}_jobs.csv')
-                if os.path.exists(csv_path):
-                    df = pd.read_csv(csv_path)
-                    job_count = len(df)
-                    last_updated = df['last_updated'].max() if 'last_updated' in df.columns else 'N/A'
-                    source = df['source'].unique()[0] if 'source' in df.columns else 'N/A'
-                    if filter_text is None or keyword.lower().find(filter_text) != -1:
-                        self.results_tree.insert('', 'end', values=(keyword, job_count, last_updated, source))
-        
-    def start_scraping(self):
-        if self.is_scraping:
-            return
-            
-        selected_keywords = [k for k, v in self.keyword_vars.items() if v.get()]
-        if not selected_keywords:
-            messagebox.showwarning("Warning", "Please select at least one keyword")
-            return
-            
-        self.is_scraping = True
-        self.start_button.config(state=tk.DISABLED)
-        self.stop_button.config(state=tk.NORMAL)
-        self.progress_bar['value'] = 0
-        
-        # Start scraping in a separate thread
-        thread = threading.Thread(target=self.scrape_jobs, args=(selected_keywords,))
-        thread.daemon = True
-        thread.start()
-        
-    def stop_scraping(self):
-        self.is_scraping = False
-        self.log("Stopping scraper...")
-        self.start_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.DISABLED)
-        
-    def scrape_jobs(self, keywords):
-        self.scraper = RemoteJobScraper()
-        total_keywords = len(keywords)
-        self.all_jobs_data = {}
-        
-        try:
-            for i, keyword in enumerate(keywords, 1):
-                if not self.is_scraping:
-                    break
-                    
-                self.log(f"Searching for {keyword} jobs...")
-                self.scraper.search_remote_jobs(keyword)
-                self.scraper.save_results(keyword)
-                
-                # Store jobs data for this keyword
-                csv_path = os.path.join('output', keyword, f'{keyword}_jobs.csv')
-                if os.path.exists(csv_path):
-                    df = pd.read_csv(csv_path)
-                    self.all_jobs_data[keyword] = df.to_dict('records')
-                
-                self.update_progress(i, total_keywords)
-                self.update_results_tree()
-                
-            self.log("Job search completed!")
-            if self.is_scraping:  # Only show summary if not stopped manually
-                self.root.after(100, self.show_completion_summary)
-            
-        except Exception as e:
-            self.log(f"Error during scraping: {str(e)}")
-            messagebox.showerror("Error", f"An error occurred during scraping: {str(e)}")
-            
-        finally:
-            if self.scraper:
-                self.scraper.close()
-            self.is_scraping = False
-            self.start_button.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED)
-            self.progress_var.set("Ready to start...")
         
 def main():
     root = tk.Tk()
